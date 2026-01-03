@@ -1,10 +1,88 @@
-import { getFiles, saveFile, updateFile, deleteFile, deleteAllFiles, getFileById } from './database.js'
+import fs from 'fs'
+
+const DB_FILE = '/tmp/files.json'
+
+const ensureDataDir = () => {
+  try {
+    const dataDir = '/tmp'
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true })
+    }
+  } catch (error) {
+    console.error('创建目录错误:', error)
+  }
+}
+
+const readDatabase = () => {
+  try {
+    ensureDataDir()
+    
+    if (fs.existsSync(DB_FILE)) {
+      const data = fs.readFileSync(DB_FILE, 'utf-8')
+      return JSON.parse(data)
+    }
+    return []
+  } catch (error) {
+    console.error('读取数据库错误:', error)
+    return []
+  }
+}
+
+const writeDatabase = (files) => {
+  try {
+    ensureDataDir()
+    fs.writeFileSync(DB_FILE, JSON.stringify(files, null, 2))
+    return { success: true }
+  } catch (error) {
+    console.error('写入数据库错误:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+const getFiles = () => {
+  return readDatabase()
+}
+
+const saveFile = (fileData) => {
+  const files = readDatabase()
+  files.push(fileData)
+  return writeDatabase(files)
+}
+
+const updateFile = (fileId, updates) => {
+  const files = readDatabase()
+  const index = files.findIndex(f => f.id === fileId)
+  
+  if (index !== -1) {
+    files[index] = { ...files[index], ...updates }
+    return writeDatabase(files)
+  }
+  
+  return { success: false, error: '文件不存在' }
+}
+
+const deleteFile = (fileId) => {
+  const files = readDatabase()
+  const filteredFiles = files.filter(f => f.id !== fileId)
+  return writeDatabase(filteredFiles)
+}
+
+const deleteAllFiles = () => {
+  return writeDatabase([])
+}
+
+const getFileById = (fileId) => {
+  const files = readDatabase()
+  return files.find(f => f.id === fileId)
+}
 
 export const handler = async (event) => {
-  console.log('收到请求:', {
+  console.log('=== API请求开始 ===')
+  console.log('请求详情:', {
     path: event.path,
+    rawPath: event.rawPath,
     method: event.httpMethod,
-    headers: event.headers
+    headers: Object.keys(event.headers)
   })
 
   const headers = {
@@ -15,6 +93,7 @@ export const handler = async (event) => {
   }
 
   if (event.httpMethod === 'OPTIONS') {
+    console.log('OPTIONS请求')
     return {
       statusCode: 200,
       headers,
@@ -26,15 +105,19 @@ export const handler = async (event) => {
   const method = event.httpMethod
 
   try {
-    console.log('处理路径:', path, '方法:', method)
+    console.log('路由匹配:', { path, method })
 
     if (path === '/api/upload' && method === 'POST') {
+      console.log('处理上传请求')
       return await handleUpload(event, headers)
     } else if (path === '/api/files' && method === 'GET') {
+      console.log('处理获取文件列表请求')
       return await handleGetFiles(event, headers)
     } else if (path === '/api/files/delete-all' && method === 'DELETE') {
+      console.log('处理删除所有文件请求')
       return await handleDeleteAll(headers)
     } else if (path === '/api/files/batch-delete' && method === 'POST') {
+      console.log('处理批量删除请求')
       return await handleBatchDelete(event, headers)
     } else if (path.startsWith('/api/files/') && method === 'DELETE') {
       const parts = path.split('/')
@@ -65,7 +148,8 @@ export const handler = async (event) => {
       }
     }
   } catch (error) {
-    console.error('API错误:', error)
+    console.error('=== API错误 ===')
+    console.error('错误信息:', error.message)
     console.error('错误堆栈:', error.stack)
     return {
       statusCode: 500,
@@ -77,13 +161,14 @@ export const handler = async (event) => {
 
 async function handleUpload(event, headers) {
   try {
-    console.log('开始处理上传')
+    console.log('=== 开始处理上传 ===')
     const buffer = Buffer.from(event.body, event.isBase64Encoded ? 'base64' : 'utf8')
     const contentType = event.headers['content-type'] || ''
     let files = []
     
     console.log('Content-Type:', contentType)
     console.log('Body长度:', buffer.length)
+    console.log('是否Base64编码:', event.isBase64Encoded)
     
     if (contentType.includes('multipart/form-data')) {
       const boundary = contentType.split('boundary=')[1]
@@ -130,14 +215,16 @@ async function handleUpload(event, headers) {
       }
     }
 
-    console.log('上传完成，文件数量:', files.length)
+    console.log('=== 上传完成 ===')
+    console.log('文件数量:', files.length)
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify(files)
     }
   } catch (error) {
-    console.error('上传处理错误:', error)
+    console.error('=== 上传处理错误 ===')
+    console.error('错误:', error)
     return {
       statusCode: 500,
       headers,
@@ -148,6 +235,7 @@ async function handleUpload(event, headers) {
 
 async function handleGetFiles(event, headers) {
   try {
+    console.log('=== 开始获取文件列表 ===')
     const queryStringParameters = event.queryStringParameters || {}
     const search = queryStringParameters.search
     const sortBy = queryStringParameters.sortBy
@@ -189,6 +277,7 @@ async function handleGetFiles(event, headers) {
     const paginatedFiles = filteredFiles.slice(startIndex, endIndex)
     
     console.log('返回文件数:', paginatedFiles.length)
+    console.log('=== 获取文件列表完成 ===')
     
     return {
       statusCode: 200,
@@ -201,7 +290,8 @@ async function handleGetFiles(event, headers) {
       })
     }
   } catch (error) {
-    console.error('获取文件错误:', error)
+    console.error('=== 获取文件错误 ===')
+    console.error('错误:', error)
     return {
       statusCode: 500,
       headers,
