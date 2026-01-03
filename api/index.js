@@ -1,88 +1,21 @@
 import express from 'express'
 import multer from 'multer'
 import path from 'path'
-import fs from 'fs'
 import cors from 'cors'
+import { uploadFileToS3, deleteFileFromS3, getSignedFileUrl } from '../lib/s3.js'
+import { getFiles, saveFile, updateFile, deleteFile, deleteAllFiles, getFileById } from '../lib/database.js'
 
 const app = express()
 
-// Middleware
 app.use(cors())
 app.use(express.json())
 
-// 内存存储文件数据
-let files = []
-let fileIdCounter = 1
-
-// 确保上传目录存在
-const uploadDir = path.join(process.cwd(), 'uploads')
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true })
-}
-
-// 启动时从文件系统加载文件
-const loadFilesFromFileSystem = () => {
-  try {
-    const uploadedFiles = fs.readdirSync(uploadDir)
-    uploadedFiles.forEach(filename => {
-      const filePath = path.join(uploadDir, filename)
-      const stats = fs.statSync(filePath)
-      
-      let originalFilename = filename
-      const match = filename.match(/^\d+-(.+)$/)
-      if (match) {
-        originalFilename = match[1]
-      }
-      
-      const fileData = {
-        id: fileIdCounter++,
-        filename: originalFilename,
-        path: filePath,
-        size: stats.size,
-        mimetype: 'application/octet-stream',
-        uploadDate: stats.mtime,
-        favorite: false
-      }
-      files.push(fileData)
-    })
-    console.log(`从文件系统加载了 ${files.length} 个文件`)
-  } catch (error) {
-    console.error('从文件系统加载文件错误:', error)
-  }
-}
-
-loadFilesFromFileSystem()
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir)
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now()
-    let filename = file.originalname
-    
-    try {
-      if (typeof filename === 'string' && filename.length > 0) {
-        if (/[\u00e7\u00e6\u2039\u201a\u02dc\u017d\u0153\u017f\u00e4\u00b8]/.test(filename)) {
-          const buffer = Buffer.from(filename, 'latin1')
-          const decoded = buffer.toString('utf8')
-          if (/[\u4e00-\u9fa5]/.test(decoded)) {
-            filename = decoded
-          }
-        }
-      }
-    } catch (error) {
-      console.error('文件名解码错误:', error)
-    }
-    
-    const finalFilename = uniqueSuffix + '-' + filename
-    cb(null, finalFilename)
-  }
-})
-
+const storage = multer.memoryStorage()
 const upload = multer({ storage })
 
-app.post('/api/upload', upload.array('files'), (req, res) => {
+let fileIdCounter = 1
+
+app.post('/api/upload', upload.array('files'), async (req, res) => {
   console.log('收到上传请求')
   
   try {
@@ -90,20 +23,50 @@ app.post('/api/upload', upload.array('files'), (req, res) => {
       return res.status(400).json({ message: '没有上传文件' })
     }
 
-    const uploadedFiles = req.files.map(file => {
+    const uploadedFiles = []
+    
+    for (const file of req.files) {
+      let filename = file.originalname
+      
+      try {
+        if (typeof filename === 'string' && filename.length > 0) {
+          if (/[\u00e7\u00e6\u2039\u201a\u02dc\u017d\u0153\u017f\u00e4\u00b8]/.test(filename)) {
+            const buffer = Buffer.from(filename, 'latin1')
+            const decoded = buffer.toString('utf8')
+            if (/[\u4e00-\u9fa5]/.test(decoded)) {
+              filename = decoded
+            }
+          }
+        }
+      } catch (error) {
+        console.error('文件名解码错误:', error)
+      }
+      
+      const uniqueSuffix = Date.now()
+      const s3Key = `${uniqueSuffix}-${filename}`
+      
+      const uploadResult = await uploadFileToS3(s3Key, file.buffer, file.mimetype)
+      
+      if (!uploadResult.success) {
+        console.error('上传到S3失败:', uploadResult.error)
+        continue
+      }
+      
       const fileData = {
         id: fileIdCounter++,
-        filename: file.filename,
-        path: file.path,
+        filename: filename,
+        s3Key: s3Key,
         size: file.size,
         mimetype: file.mimetype,
-        uploadDate: new Date(),
+        uploadDate: new Date().toISOString(),
         favorite: false
       }
-      files.push(fileData)
-      return fileData
-    })
+      
+      saveFile(fileData)
+      uploadedFiles.push(fileData)
+    }
 
+    console.log('上传成功，返回文件:', uploadedFiles)
     res.status(200).json(uploadedFiles)
   } catch (error) {
     console.error('上传错误:', error)
@@ -115,7 +78,7 @@ app.get('/api/files', (req, res) => {
   try {
     const { search, sortBy, sortOrder, page = 1, limit = 30 } = req.query
     
-    let filteredFiles = [...files]
+    let filteredFiles = getFiles()
     
     if (search) {
       filteredFiles = filteredFiles.filter(file =>
@@ -157,30 +120,32 @@ app.get('/api/files', (req, res) => {
   }
 })
 
-app.get('/api/files/:id', (req, res) => {
+app.get('/api/files/:id', async (req, res) => {
   try {
-    const file = files.find(f => f.id === parseInt(req.params.id))
+    const file = getFileById(parseInt(req.params.id))
     
     if (!file) {
       return res.status(404).json({ message: '文件不存在' })
     }
     
-    res.sendFile(path.resolve(file.path))
+    const signedUrl = await getSignedFileUrl(file.s3Key, 3600)
+    
+    res.redirect(signedUrl)
   } catch (error) {
     console.error('获取文件错误:', error)
     res.status(500).json({ message: '获取文件失败', error: error.message })
   }
 })
 
-app.delete('/api/files/delete-all', (req, res) => {
+app.delete('/api/files/delete-all', async (req, res) => {
   try {
-    files.forEach(file => {
-      if (fs.existsSync(file.path)) {
-        fs.unlinkSync(file.path)
-      }
-    })
+    const files = getFiles()
     
-    files = []
+    for (const file of files) {
+      await deleteFileFromS3(file.s3Key)
+    }
+    
+    deleteAllFiles()
     
     res.json({ message: '所有文件已删除' })
   } catch (error) {
@@ -189,9 +154,10 @@ app.delete('/api/files/delete-all', (req, res) => {
   }
 })
 
-app.delete('/api/files/delete-by-extension/:extension', (req, res) => {
+app.delete('/api/files/delete-by-extension/:extension', async (req, res) => {
   try {
     const { extension } = req.params
+    const files = getFiles()
     const filesToDelete = files.filter(file => 
       path.extname(file.filename).toLowerCase() === `.${extension.toLowerCase()}`
     )
@@ -200,15 +166,10 @@ app.delete('/api/files/delete-by-extension/:extension', (req, res) => {
       return res.status(404).json({ message: `没有找到扩展名为 .${extension} 的文件` })
     }
     
-    filesToDelete.forEach(file => {
-      if (fs.existsSync(file.path)) {
-        fs.unlinkSync(file.path)
-      }
-    })
-    
-    files = files.filter(file => 
-      path.extname(file.filename).toLowerCase() !== `.${extension.toLowerCase()}`
-    )
+    for (const file of filesToDelete) {
+      await deleteFileFromS3(file.s3Key)
+      deleteFile(file.id)
+    }
     
     res.json({ message: `成功删除 ${filesToDelete.length} 个 .${extension} 文件` })
   } catch (error) {
@@ -217,22 +178,17 @@ app.delete('/api/files/delete-by-extension/:extension', (req, res) => {
   }
 })
 
-app.delete('/api/files/:id', (req, res) => {
+app.delete('/api/files/:id', async (req, res) => {
   try {
     const fileId = parseInt(req.params.id)
-    const fileIndex = files.findIndex(f => f.id === fileId)
+    const file = getFileById(fileId)
     
-    if (fileIndex === -1) {
+    if (!file) {
       return res.status(404).json({ message: '文件不存在' })
     }
     
-    const file = files[fileIndex]
-    
-    if (fs.existsSync(file.path)) {
-      fs.unlinkSync(file.path)
-    }
-    
-    files.splice(fileIndex, 1)
+    await deleteFileFromS3(file.s3Key)
+    deleteFile(fileId)
     
     res.json({ message: '文件删除成功' })
   } catch (error) {
@@ -241,7 +197,7 @@ app.delete('/api/files/:id', (req, res) => {
   }
 })
 
-app.post('/api/files/batch-delete', (req, res) => {
+app.post('/api/files/batch-delete', async (req, res) => {
   try {
     const { ids } = req.body
     
@@ -251,20 +207,15 @@ app.post('/api/files/batch-delete', (req, res) => {
     
     let deletedCount = 0
     
-    ids.forEach(id => {
-      const fileIndex = files.findIndex(f => f.id === parseInt(id))
+    for (const id of ids) {
+      const file = getFileById(parseInt(id))
       
-      if (fileIndex !== -1) {
-        const file = files[fileIndex]
-        
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path)
-        }
-        
-        files.splice(fileIndex, 1)
+      if (file) {
+        await deleteFileFromS3(file.s3Key)
+        deleteFile(file.id)
         deletedCount++
       }
-    })
+    }
     
     res.json({ message: `成功删除 ${deletedCount} 个文件` })
   } catch (error) {
@@ -275,15 +226,17 @@ app.post('/api/files/batch-delete', (req, res) => {
 
 app.put('/api/files/:id/favorite', (req, res) => {
   try {
-    const file = files.find(f => f.id === parseInt(req.params.id))
+    const fileId = parseInt(req.params.id)
+    const file = getFileById(fileId)
     
     if (!file) {
       return res.status(404).json({ message: '文件不存在' })
     }
     
-    file.favorite = !file.favorite
+    const newFavoriteStatus = !file.favorite
+    updateFile(fileId, { favorite: newFavoriteStatus })
     
-    res.json({ message: '收藏状态已更新', favorite: file.favorite })
+    res.json({ message: '收藏状态已更新', favorite: newFavoriteStatus })
   } catch (error) {
     console.error('更新收藏状态错误:', error)
     res.status(500).json({ message: '更新收藏状态失败', error: error.message })
