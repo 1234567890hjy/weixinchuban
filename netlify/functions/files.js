@@ -1,4 +1,4 @@
-import { getFiles } from '../../lib/database.js'
+import { getFiles } from './database.js'
 
 export const handler = async (event) => {
   const headers = {

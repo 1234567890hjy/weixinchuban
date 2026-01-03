@@ -1,4 +1,4 @@
-import { getFiles, deleteFile, deleteAllFiles } from '../../lib/database.js'
+import { getFiles, deleteFile, deleteAllFiles } from './database.js'
 
 export const handler = async (event) => {
   const headers = {

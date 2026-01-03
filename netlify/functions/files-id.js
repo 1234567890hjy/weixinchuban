@@ -1,4 +1,4 @@
-import { getFileById, deleteFile } from '../../lib/database.js'
+import { getFileById, deleteFile } from './database.js'
 
 export const handler = async (event) => {
   const headers = {
