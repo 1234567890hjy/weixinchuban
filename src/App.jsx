@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 
+const API_URL = import.meta.env.VITE_API_URL || '/api'
+
 function App() {
   const [files, setFiles] = useState([])
   const [filteredFiles, setFilteredFiles] = useState([])
@@ -19,7 +21,7 @@ function App() {
 
   const fetchFiles = async () => {
     try {
-      const response = await fetch('/api/files?limit=10000')
+      const response = await fetch(`${API_URL}/files?limit=10000`)
       const data = await response.json()
       
       const decodedFiles = (data.files || []).map(file => {
@@ -96,7 +98,7 @@ function App() {
 
     try {
       console.log('准备上传文件...')
-      const response = await fetch('/api/upload', {
+      const response = await fetch(`${API_URL}/upload`, {
         method: 'POST',
         body: formData
       })
@@ -134,7 +136,7 @@ function App() {
 
   const toggleFavorite = async (fileId) => {
     try {
-      const response = await fetch(`/api/files/${fileId}/favorite`, {
+      const response = await fetch(`${API_URL}/files/${fileId}/favorite`, {
         method: 'PUT'
       })
       const data = await response.json()
@@ -161,7 +163,7 @@ function App() {
 
   const deleteFile = async (fileId) => {
     try {
-      await fetch(`/api/files/${fileId}`, {
+      await fetch(`${API_URL}/files/${fileId}`, {
         method: 'DELETE'
       })
       fetchFiles()
@@ -177,7 +179,7 @@ function App() {
   const batchDelete = async () => {
     if (window.confirm(`确定要删除选中的 ${selectedFiles.length} 个文件吗？`)) {
       try {
-        await fetch('/api/files/batch-delete', {
+        await fetch(`${API_URL}/files/batch-delete`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -195,7 +197,7 @@ function App() {
   const deleteAll = async () => {
     if (window.confirm('确定要删除所有文件吗？')) {
       try {
-        await fetch('/api/files/delete-all', {
+        await fetch(`${API_URL}/files/delete-all`, {
           method: 'DELETE'
         })
         fetchFiles()
@@ -208,7 +210,7 @@ function App() {
 
   const deleteByExtension = async (extension) => {
     try {
-      await fetch(`/api/files/delete-by-extension/${extension}`, {
+      await fetch(`${API_URL}/files/delete-by-extension/${extension}`, {
         method: 'DELETE'
       })
       fetchFiles()
@@ -491,21 +493,21 @@ function App() {
               <div>
                 {getFileExtension(currentFile.filename) === 'pdf' ? (
                   <iframe
-                    src={`/api/files/${currentFile.id}`}
+                    src={`${API_URL}/files/${currentFile.id}`}
                     width="100%"
                     height="600px"
                     title={currentFile.filename}
                   />
                 ) : getFileExtension(currentFile.filename) === 'html' ? (
                   <iframe
-                    src={`/api/files/${currentFile.id}`}
+                    src={`${API_URL}/files/${currentFile.id}`}
                     width="100%"
                     height="600px"
                     title={currentFile.filename}
                   />
                 ) : ['jpg', 'jpeg', 'png', 'gif'].includes(getFileExtension(currentFile.filename)) ? (
                   <img
-                    src={`/api/files/${currentFile.id}`}
+                    src={`${API_URL}/files/${currentFile.id}`}
                     alt={currentFile.filename}
                     className="preview-content"
                   />
@@ -513,7 +515,7 @@ function App() {
                   <div>
                     <p>不支持的文件格式</p>
                     <a 
-                      href={`/api/files/${currentFile.id}`}
+                      href={`${API_URL}/files/${currentFile.id}`}
                       download={currentFile.filename}
                       className="btn btn-primary"
                     >
